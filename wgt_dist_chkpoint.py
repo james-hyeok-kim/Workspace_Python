@@ -5,12 +5,12 @@ import numpy as np
 import os
 from mpl_toolkits.mplot3d import Axes3D
 
-# 1. 파일 경로 설정
-dir_path = '/home/jameskimh/workspace/JiT_Pretrained_Model/jit-b-32'
+dir_path = '/home/jameskimh/workspace/JiT_Pretrained_Model/'
+model = 'jit-b-32/'
 target_file = 'real_checkpoint.pth'
-# os.path.join을 사용하는 것이 더 안전합니다.
-full_path = os.path.join(dir_path, target_file)
 
+# 세 개를 한 번에 인자로 넣으면 됩니다.
+full_path = os.path.join(dir_path, model, target_file)
 # 로드 시도 로직
 try:
     # 1. 일반적인 로드 시도
@@ -24,6 +24,12 @@ except RuntimeError:
     print("일반 로드 실패. JIT 방식으로 재시도합니다...")
     model = torch.jit.load(full_path, map_location='cpu')
     weights = model.state_dict()
+
+base_output_dir = os.path.join(dir_path, model)
+if not os.path.exists(base_output_dir):
+    os.makedirs(base_output_dir, exist_ok=True)
+    print(f"기본 폴더가 생성되었습니다: {base_output_dir}")
+
 
 def print_weight_stats(weights, layer_name_filter="weight"):
     """가중치 주요 통계치 요약 출력"""
@@ -41,7 +47,8 @@ def print_weight_stats(weights, layer_name_filter="weight"):
             print(f"{name[:50]:<50} | {mean_val:10.6f} | {std_val:10.6f} | {max_val:10.6f}")
 
 
-def plot_all_layers_channelwise(weights, layer_name_filter="weight", output_dir='all_layer_distributions'):
+def plot_all_layers_channelwise(weights, layer_name_filter="weight",
+        output_dir=os.hath.join(base_output_dir, 'all_layer_distributions')):
     """
     모든 레이어의 '모든 채널'을 박스 플롯으로 시각화하여 저장
     """
@@ -99,7 +106,8 @@ def plot_all_layers_channelwise(weights, layer_name_filter="weight", output_dir=
     print(f"\n[완료] 모든 레이어의 전체 채널 분포가 '{output_dir}'에 저장되었습니다.")
 
 
-def plot_all_layers_3d(weights, layer_name_filter="weight", output_dir='layer_3d_plots'):
+def plot_all_layers_3d(weights, layer_name_filter="weight",
+        output_dir=os.hath.join(base_output_dir, 'layer_3d_plots')):
     """
     모든 레이어의 가중치를 3D Surface Plot으로 시각화하여 저장
     """
@@ -158,7 +166,9 @@ def plot_all_layers_3d(weights, layer_name_filter="weight", output_dir='layer_3d
         
         print(f"3D 그래프 저장 완료: {save_path} (Shape: {data.shape})")
 
-def plot_combined_layers_boxplot(weights, layer_name_filter="weight", output_dir='all_layer_comparison', output_filename='all_layers_comparison.png'):
+def plot_combined_layers_boxplot(weights, layer_name_filter="weight",
+        output_dir=os.path.join(base_output_dir, 'all_layer_comparison'),
+                                 output_filename='all_layers_comparison.png'):
     """
     모든 레이어의 가중치 분포를 하나의 이미지(박스 플롯)로 통합 시각화
     """
