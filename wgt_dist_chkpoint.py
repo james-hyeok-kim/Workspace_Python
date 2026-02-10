@@ -5,31 +5,25 @@ import numpy as np
 import os
 from mpl_toolkits.mplot3d import Axes3D
 
-dir_path = '/home/jameskimh/workspace/JiT_Pretrained_Model/'
-model = 'jit-b-32/'
-target_file = 'real_checkpoint.pth'
-
-# 세 개를 한 번에 인자로 넣으면 됩니다.
-full_path = os.path.join(dir_path, model, target_file)
-# 로드 시도 로직
-try:
-    # 1. 일반적인 로드 시도
-    checkpoint = torch.load(full_path, map_location='cpu', weights_only=False)
-    if isinstance(checkpoint, dict):
-        weights = checkpoint.get('model', checkpoint.get('state_dict', checkpoint))
-    else:
-        weights = checkpoint.state_dict()
-except RuntimeError:
-    # 2. JIT 로드 시도 (현재 질문자님의 상황에 유력)
-    print("일반 로드 실패. JIT 방식으로 재시도합니다...")
-    model = torch.jit.load(full_path, map_location='cpu')
-    weights = model.state_dict()
-
-base_output_dir = os.path.join(dir_path, model)
-if not os.path.exists(base_output_dir):
-    os.makedirs(base_output_dir, exist_ok=True)
-    print(f"기본 폴더가 생성되었습니다: {base_output_dir}")
-
+def load_weights(dir_path, model_name, target_file):
+    """경로에서 모델 파일을 읽어 가중치(state_dict)를 반환"""
+    full_path = os.path.join(dir_path, model_name, target_file)
+    
+    try:
+        # 1. 일반적인 로드 시도
+        checkpoint = torch.load(full_path, map_location='cpu', weights_only=False)
+        if isinstance(checkpoint, dict):
+            weights = checkpoint.get('model', checkpoint.get('state_dict', checkpoint))
+        else:
+            weights = checkpoint.state_dict()
+        print(f"성공적으로 로드되었습니다: {full_path}")
+    except Exception as e:
+        # 2. JIT 로드 시도
+        print(f"일반 로드 실패({e}). JIT 방식으로 재시도합니다...")
+        model = torch.jit.load(full_path, map_location='cpu')
+        weights = model.state_dict()
+        
+    return weights
 
 def print_weight_stats(weights, layer_name_filter="weight"):
     """가중치 주요 통계치 요약 출력"""
@@ -46,8 +40,110 @@ def print_weight_stats(weights, layer_name_filter="weight"):
             
             print(f"{name[:50]:<50} | {mean_val:10.6f} | {std_val:10.6f} | {max_val:10.6f}")
 
+def plot_all_layers_channelwise(weights, base_output_dir, layer_name_filter="weight"):
+    """모든 레이어의 모든 채널을 박스 플롯으로 시각화"""
+    output_dir = os.path.join(base_output_dir, 'all_layer_distributions')
+    os.makedirs(output_dir, exist_ok=True)
 
-def plot_all_layers_channelwise(weights, layer_name_filter="weight",
+    target_layers = [name for name, param in weights.items() 
+                     if layer_name_filter in name and len(param.shape) >= 2]
+    
+    print(f"시작: 채널별 박스플롯 생성 (총 {len(target_layers)}개)")
+
+    for name in target_layers:
+        param = weights[name].detach().cpu()
+        num_channels = param.shape[0]
+        reshaped_data = param.view(num_channels, -1).numpy()
+
+        dynamic_width = max(10, min(100, num_channels * 0.2))
+        plt.figure(figsize=(dynamic_width, 8))
+        
+        sns.boxplot(data=[list(ch) for ch in reshaped_data], 
+                    palette="husl", fliersize=1, linewidth=0.5)
+
+        plt.axhline(y=np.max(reshaped_data), color='red', linestyle='--', linewidth=1, alpha=0.4)
+        plt.axhline(y=np.min(reshaped_data), color='blue', linestyle='--', linewidth=1, alpha=0.4)
+        plt.axhline(y=0, color='black', linestyle='-', linewidth=0.5, alpha=0.2)
+
+        if num_channels > 50:
+            step = max(1, num_channels // 20)
+            plt.xticks(range(0, num_channels, step), range(0, num_channels, step))
+
+        plt.title(f"Layer: {name} (Channels: {num_channels})", fontsize=16)
+        
+        save_path = os.path.join(output_dir, f"{name.replace('.', '_')}_all_channels.png")
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+    print(f"완료: {output_dir}")
+
+def plot_all_layers_3d(weights, base_output_dir, layer_name_filter="weight"):
+    """모든 레이어의 가중치를 3D Surface Plot으로 시각화"""
+    output_dir = os.path.join(base_output_dir, 'layer_3d_plots')
+    os.makedirs(output_dir, exist_ok=True)
+
+    target_layers = [name for name, param in weights.items() 
+                     if layer_name_filter in name and len(param.shape) >= 2]
+
+    for name in target_layers:
+        param = weights[name].detach().cpu()
+        
+        if len(param.shape) == 4:
+            data = param.mean(dim=(2, 3)).numpy()
+        else:
+            data = param.numpy()
+
+        out_dim, in_dim = data.shape
+        X, Y = np.meshgrid(np.arange(in_dim), np.arange(out_dim))
+
+        fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        surf = ax.plot_surface(X, Y, data, cmap='coolwarm', linewidth=0, antialiased=False, alpha=0.8)
+
+        ax.set_title(f"3D Weight Distribution: {name}")
+        fig.colorbar(surf, ax=ax, shrink=0.5, aspect=10)
+        ax.view_init(elev=30, azim=-60)
+
+        save_path = os.path.join(output_dir, f"{name.replace('.', '_')}_3d.png")
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+    print(f"완료: 3D 그래프 저장됨 ({output_dir})")
+
+def plot_combined_layers_boxplot(weights, base_output_dir, layer_name_filter="weight"):
+    """전체 레이어 가중치 분포를 하나의 박스플롯으로 통합"""
+    output_dir = os.path.join(base_output_dir, 'all_layer_comparison')
+    os.makedirs(output_dir, exist_ok=True)
+
+    all_data = []
+    layer_names = []
+
+    for name, param in weights.items():
+        if layer_name_filter in name and len(param.shape) >= 2:
+            all_data.append(param.detach().cpu().numpy().flatten())
+            layer_names.append(name)
+
+    if not all_data: return
+
+    plt.figure(figsize=(max(15, len(all_data) * 0.6), 10))
+    plt.boxplot(all_data, patch_artist=True, showfliers=True,
+                boxprops=dict(facecolor='#EBF5FB', color='#2980B9'),
+                medianprops=dict(color='#E67E22', linewidth=2),
+                flierprops=dict(marker='o', markersize=2, alpha=0.3),
+                widths=0.6)
+
+    plt.xticks(range(1, len(all_data) + 1), layer_names, rotation=90)
+    plt.title("Weight Distribution Comparison by All Layers", fontsize=20)
+    
+    save_path = os.path.join(output_dir, 'all_layers_comparison.png')
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+    print(f"완료: 통합 비교 이미지 저장됨 ({save_path})")
+
+# --- 3. 메인 실행 함수 ---
+
+def plot_all_layers_channelwise(weights, base_output_dir, layer_name_filter="weight",
         output_dir=os.hath.join(base_output_dir, 'all_layer_distributions')):
     """
     모든 레이어의 '모든 채널'을 박스 플롯으로 시각화하여 저장
@@ -234,12 +330,27 @@ def plot_combined_layers_boxplot(weights, layer_name_filter="weight",
 
 # --- 실행 영역 ---
 
-# print("\n=== Weight Statistics Summary ===")
-# print_weight_stats(weights)
+def main():
+    # 설정 (필요에 따라 수정)
+    DIR_PATH = '/home/jameskimh/workspace/JiT_Pretrained_Model/'
+    MODEL_NAME = 'jit-b-32/'
+    TARGET_FILE = 'real_checkpoint.pth'
+    
+    # 1. 가중치 로드
+    weights = load_weights(DIR_PATH, MODEL_NAME, TARGET_FILE)
+    
+    # 2. 출력 경로 설정 및 생성
+    base_output_dir = os.path.join(DIR_PATH, MODEL_NAME, 'analysis_results')
+    os.makedirs(base_output_dir, exist_ok=True)
+    print(f"결과 저장 경로: {base_output_dir}")
 
-# 모든 레이어에 대해 실행
-#plot_all_layers_channelwise(weights)
+    # 3. 함수들 실행
+    print_weight_stats(weights)
+    plot_all_layers_channelwise(weights, base_output_dir)
+    plot_all_layers_3d(weights, base_output_dir)
+    plot_combined_layers_boxplot(weights, base_output_dir)
+    
+    print("\n[모든 작업이 성공적으로 완료되었습니다.]")
 
-#plot_all_layers_3d(weights)
-
-plot_combined_layers_boxplot(weights)
+if __name__ == "__main__":
+    main()
